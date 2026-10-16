@@ -137,7 +137,7 @@ function contestCard(c, mine) {
   e.rows.forEach((r) => {
     const res = r.state === 'played' ? (r.win === 0 ? '–' : (r.win === 1 ? ARR_L : ARR_R)) : '';
     h += '<tr class="hole ' + (r.state === 'over' ? 'over' : '') + '" data-act="enter" data-cid="' + c.id + '" data-hole="' + r.hole + '">' +
-      '<td>' + holeCell(r) + '</td><td>' + r.par + '</td><td>' + r.si + '</td>' +
+      '<td>' + holeCell(r, c.stage === 'finals') + '</td><td>' + r.par + '</td><td>' + r.si + '</td>' +
       e.units.map((u, j) => '<td class="sc">' + (r.scores ? r.scores[j] : '·') + (r.strokes[j] > 0 ? '<span class="dot">' + '•'.repeat(Math.min(r.strokes[j], 3)) + '</span>' : '') + '</td>').join('') +
       '<td class="mono">' + res + '</td></tr>';
   });
@@ -152,8 +152,8 @@ function contestCard(c, mine) {
 const ARR = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12H5M11 5l-7 7 7 7"/></svg>';
 const ARR_L = '<span class="arr" title="left side won">' + ARR + '</span>';
 const ARR_R = '<span class="arr flip" title="right side won">' + ARR + '</span>';
-function holeCell(r) {
-  return '<button class="hnb" data-act="holemap" data-hole="' + r.hole + '" data-th="' + r.th + '" aria-label="View map of hole ' + r.th + '">' + r.th + '</button>';
+function holeCell(r, showCourse) {
+  return (showCourse ? '<div class="hcell">' : '') + '<button class="hnb" data-act="holemap" data-hole="' + r.hole + '" data-th="' + r.th + '" aria-label="View map of hole ' + r.th + '">' + r.th + '</button>' + (showCourse ? '<span class="ch">hole ' + r.hole + '</span></div>' : '');
 }
 
 function semisBody(c, e) {

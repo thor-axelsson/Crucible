@@ -107,3 +107,4 @@ body{font-variant-numeric:lining-nums}
 .holes td.mono{font:700 22px var(--sans)}
 .arr{display:inline-flex;vertical-align:middle}.arr.flip svg{transform:scaleX(-1)}
 .btn.ghost.hs-x{color:var(--bone);border-color:rgba(241,236,221,.55);font-size:20px;line-height:1;min-width:44px;min-height:44px}
+.hcell{display:flex;align-items:center;justify-content:center;gap:2px}.ch{font:400 10px var(--mono);color:var(--muted);opacity:.8;line-height:1.1;text-align:left}
