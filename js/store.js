@@ -140,3 +140,16 @@ export function startFinals() {
   });
 }
 export const setStage = (stage) => mutate((e) => { e.stage = stage; });
+
+// Trial-run reset: wipes every score. full=false keeps the draw (back to pool stage); full=true also clears the draw.
+export async function resetEvent(full) {
+  await store.db.clearScores();
+  await mutate((e) => {
+    const pool = e.matches.filter((m) => m.stage === 'pool');
+    e.matches = full ? [] : pool;
+    e.stage = e.matches.length ? 'pool' : 'setup';
+    e.overrides = { finalWinner: {} };
+    delete e.poolFinalizedAt;
+    Object.values(e.players).forEach((p) => { p.tieBreak = 0; });
+  });
+}

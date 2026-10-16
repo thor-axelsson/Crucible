@@ -58,7 +58,15 @@ async function createFirestore(eventId, cfg) {
     onEvent: ev.on, onScores: sc.on, onStatus: st.on,
     async saveEvent(e) { await fsM.setDoc(evRef, JSON.parse(JSON.stringify(e))); },
     async setScore(key, val) { fsM.setDoc(fsM.doc(scCol, key), val).catch((e) => { err = e.message; push(); }); },
-    async clearScores() { throw new Error('Clearing shared scores is not supported from the app.'); },
+    async clearScores() {
+      const snap = await fsM.getDocs(scCol);
+      const docs = []; snap.forEach((d) => docs.push(d.ref));
+      for (let i = 0; i < docs.length; i += 400) {
+        const b = fsM.writeBatch(fs);
+        docs.slice(i, i + 400).forEach((r) => b.delete(r));
+        await b.commit();
+      }
+    },
     async test() {
       try {
         const probe = fsM.doc(fs, 'events', eventId, 'scores', '_probe');

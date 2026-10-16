@@ -1,5 +1,5 @@
 import { init, store, subscribe, ctx, getScores, scoreMeta, enterScore, mutate, players, contest, evalContest, standings,
-  fillSampleHandicaps, handicapsReady, drawPool, finalizeGroup, reopenGroup, startFinals, setStage, setMe, forfeit, unforfeit } from './store.js';
+  fillSampleHandicaps, handicapsReady, drawPool, finalizeGroup, reopenGroup, startFinals, setStage, setMe, forfeit, unforfeit, resetEvent } from './store.js';
 import { holeSvg, teeYards } from './holes.js';
 import * as E from './engine.js';
 import { rulesSections } from './rules.js';
@@ -226,7 +226,7 @@ function holeSheet() {
 function confirmSheet() {
   const c = ui.confirm;
   return '<div class="sheet center" data-act="confirmNo"><div class="dlg"><h2>' + esc(c.title) + '</h2><p>' + c.body + '</p>' +
-    '<div class="row" style="margin-top:14px"><button class="btn ghost sp" data-act="confirmNo">Cancel</button><button class="btn ' + (c.danger ? 'coral' : '') + ' sp" data-act="confirmYes">' + esc(c.yes) + '</button></div></div></div>';
+    (c.requireText ? '<input id="cf" placeholder="Type ' + esc(c.requireText) + '" autocomplete="off" style="width:100%;margin-top:10px">' + (c.err ? '<p class="err small">' + esc(c.err) + '</p>' : '') : '') + '<div class="row" style="margin-top:14px"><button class="btn ghost sp" data-act="confirmNo">Cancel</button><button class="btn ' + (c.danger ? 'coral' : '') + ' sp" data-act="confirmYes">' + esc(c.yes) + '</button></div></div></div>';
 }
 
 // ---------- leaderboard ----------
@@ -396,6 +396,9 @@ function viewAdmin() {
     '<p class="small muted" style="margin:6px 0">Rows under SI are yardages per tee.</p>' +
     tees.map((t) => '<div class="row" style="margin:6px 0"><b class="sp">' + esc(t) + '</b><input type="number" step="0.1" data-path="course.tees.' + t + '.rating" value="' + course.tees[t].rating + '"><input type="number" step="1" data-path="course.tees.' + t + '.slope" value="' + course.tees[t].slope + '"></div>').join('') + '</details>';
 
+  h += '<details class="card"><summary>Reset (trial run)</summary><p class="small muted">For a practice round before the event. Wipes scores for everyone on every phone.</p>' +
+    '<div class="row" style="flex-wrap:wrap"><button class="btn coral sm" data-act="askReset" data-v="scores">Reset scores, keep the draw</button><button class="btn ghost sm warn" data-act="askReset" data-v="full">Reset scores and draw</button></div>' +
+    '<p class="small muted">A phone that was offline during the reset may re-send its old scores when it reconnects. Reopen the app on it, or clear its site data, if scores reappear.</p></details>';
   h += '<details class="card"><summary>Data &amp; connection</summary>' +
     '<p class="small">Mode: <b>' + (store.db.mode === 'firestore' ? 'Shared (Firebase)' : 'Demo (this phone only)') + '</b> · event id ' + esc(EVENT_ID) + '</p>' +
     '<div class="row" style="flex-wrap:wrap"><button class="btn sm" data-act="test">Test connection</button><button class="btn ghost sm" data-act="export">Export backup</button><button class="btn ghost sm" data-act="import">Import backup</button></div>' +
@@ -459,9 +462,18 @@ $app.addEventListener('click', async (ev0) => {
     }
     case 'confirmNo': ui.confirm = null; break;
     case 'confirmYes': {
-      const c1 = ui.confirm; ui.confirm = null;
+      const c1 = ui.confirm;
+      if (c1.requireText) {
+        const v = (document.getElementById('cf') || {}).value || '';
+        if (v.trim().toUpperCase() !== c1.requireText) { c1.err = 'Type ' + c1.requireText + ' to confirm.'; break; }
+      }
+      ui.confirm = null;
       if (c1.kind === 'forfeit') { if (ui.entry) ui.entry.vals[c1.j] = null; render(); await forfeit(c1.cid, c1.pid, c1.idx); return; }
       if (c1.kind === 'finalize') { try { await finalizeGroup(); ui.review = false; ui.viewId = null; ui.tab = 'board'; } catch (err) { alert(err.message); } break; }
+      if (c1.kind === 'reset') {
+        try { await resetEvent(c1.full); ui.review = false; ui.viewId = null; ui.tab = 'admin'; alert('Reset done.'); } catch (err) { alert('Reset failed: ' + err.message); }
+        break;
+      }
       if (c1.kind === 'reopen') { await reopenGroup(); ui.review = false; return; }
       break;
     }
@@ -473,6 +485,13 @@ $app.addEventListener('click', async (ev0) => {
       ui.confirm = { kind: 'finalize', danger: false, yes: 'Finalize', title: 'Finalize group stage?',
         body: (probs.length ? '<b class="err">' + probs.length + ' match' + (probs.length === 1 ? ' is' : 'es are') + ' not finished.</b> ' : '') +
           'This locks in the pool standings, seeds the upper and lower semis, and moves everyone\'s match screen to their semifinal.' };
+      break;
+    }
+    case 'askReset': {
+      const full = d.v === 'full';
+      ui.confirm = { kind: 'reset', full, danger: true, requireText: 'RESET', yes: 'Reset for everyone', title: full ? 'Reset everything?' : 'Reset all scores?',
+        body: full ? 'Deletes <b>every score</b> for <b>everyone</b>, and clears the draw, semis and finals. Players and handicaps are kept. Cannot be undone.'
+          : 'Deletes <b>every score</b> for <b>everyone</b> and returns to pool play with the same draw (semis and finals are removed). Players and handicaps are kept. Cannot be undone.' };
       break;
     }
     case 'askReopen':
