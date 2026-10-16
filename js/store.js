@@ -26,9 +26,17 @@ export function newEvent() {
 export async function init() {
   store.db = await createDb(EVENT_ID, FIREBASE);
   store.me = lsGet('crucible:me');
+  // events saved by older versions may lack tee yardages; fill any gaps from the built-in course
+  const migrate = (e) => {
+    if (e && e.course && e.course.tees) Object.keys(COURSE.tees).forEach((t) => {
+      const tee = e.course.tees[t];
+      if (tee && !Array.isArray(tee.yards)) tee.yards = COURSE.tees[t].yards;
+    });
+    return e;
+  };
   let seeded = false;
   store.db.onEvent((e, meta) => {
-    store.event = e; store.ready = true;
+    store.event = migrate(e); store.ready = true;
     // first run: create the default event once the server confirms there is none
     if (e === null && !seeded && !(meta && meta.fromCache)) { seeded = true; store.db.saveEvent(newEvent()); }
     notify();

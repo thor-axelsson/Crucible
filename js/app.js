@@ -135,13 +135,13 @@ function contestCard(c, mine) {
   const short = (u) => (cols > 2 ? esc(u.label) : (u.team === 1 ? 'Team 1' : 'Team 2'));
   h += '<div class="card"><table class="holes"><tr><th>Hole</th><th>Par</th><th>SI</th>' + e.units.map((u) => '<th>' + (c.stage === 'finals' || cols > 2 ? esc(u.label.split(' ')[0]) : esc(u.label.split(' & ').map((x) => x.slice(0, 5)).join('/'))) + '</th>').join('') + '<th>Res</th></tr>';
   e.rows.forEach((r) => {
-    const res = r.state === 'played' ? (r.win === 0 ? '–' : (r.win === 1 ? '◀' : '▶')) : '';
+    const res = r.state === 'played' ? (r.win === 0 ? '–' : (r.win === 1 ? '←' : '→')) : '';
     h += '<tr class="hole ' + (r.state === 'over' ? 'over' : '') + '" data-act="enter" data-cid="' + c.id + '" data-hole="' + r.hole + '">' +
       '<td>' + holeCell(r) + '</td><td>' + r.par + '</td><td>' + r.si + '</td>' +
       e.units.map((u, j) => '<td class="sc">' + (r.scores ? r.scores[j] : '·') + (r.strokes[j] > 0 ? '<span class="dot">' + '•'.repeat(Math.min(r.strokes[j], 3)) + '</span>' : '') + '</td>').join('') +
       '<td class="mono">' + res + '</td></tr>';
   });
-  h += '</table><p class="small muted" style="margin:8px 0 0">Tap a hole to enter or fix a score. <span class="dot">•</span> = stroke received. ◀ Team 1 / first player wins hole.</p>';
+  h += '</table><p class="small muted" style="margin:8px 0 0">Tap a hole row to enter or fix a score. Tap a hole number for the hole map. <span class="dot">•</span> = stroke received. ← left side won the hole, → right side won it, – halved.</p>';
   const last = e.rows.filter((r) => r.entered).map((r) => scoreMeta(c.id, r.hole)).filter(Boolean).sort((a, b) => b.at - a.at)[0];
   if (last) h += '<p class="small muted" style="margin:4px 0 0">Last score by ' + esc(last.by) + ' at ' + fmtTime(last.at) + '</p>';
   h += '</div>';
@@ -149,9 +149,8 @@ function contestCard(c, mine) {
   return h;
 }
 
-const MAP_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4 3 6.5v13L9 17l6 3 6-2.5v-13L15 7 9 4Z"/><path d="M9 4v13M15 7v13"/></svg>';
 function holeCell(r) {
-  return '<div class="hcell"><span class="hn">' + r.th + '</span><button class="mapbtn" data-act="holemap" data-hole="' + r.hole + '" data-th="' + r.th + '" aria-label="View hole ' + r.hole + ' map">' + MAP_ICON + '</button></div><div class="small muted mono">c' + r.hole + '</div>';
+  return '<button class="hnb" data-act="holemap" data-hole="' + r.hole + '" data-th="' + r.th + '" aria-label="View map of hole ' + r.th + '">' + r.th + '</button>';
 }
 
 function semisBody(c, e) {
@@ -168,7 +167,7 @@ function semisBody(c, e) {
     h += '<tr class="hole" data-act="enter" data-cid="' + c.id + '" data-hole="' + r.hole + '"><td>' + holeCell(r) + '</td><td>' + r.par + '</td><td>' + r.si + '</td>' +
       e.players.map((p, j) => '<td class="sc">' + (r.gone && r.gone[j] ? '<span class="wdtag">WD</span>' : (r.scores ? (r.scores[j] == null ? '<span class="nstag">NS</span>' : r.scores[j]) : '·')) + (r.strokes[j] > 0 ? '<span class="dot">' + '•'.repeat(Math.min(r.strokes[j], 3)) + '</span>' : '') + (r.pts ? '<div class="small muted">' + r.pts[j] + ' pt</div>' : '') + '</td>').join('') + '</tr>';
   });
-  return h + '</table><p class="small muted" style="margin:8px 0 0">Tap a hole to enter or fix scores. Points shown are net stableford.</p></div>';
+  return h + '</table><p class="small muted" style="margin:8px 0 0">Tap a hole row to enter or fix scores. Tap a hole number for the hole map. Points shown are net stableford.</p></div>';
 }
 
 // ---------- score entry ----------
@@ -216,7 +215,7 @@ function holeSheet() {
     '<div class="hs-stat"><span>PAR</span><b>' + course.par[hole - 1] + '</b></div><div class="hs-stat"><span>SI</span><b>' + course.si[hole - 1] + '</b></div>' +
     '<button class="btn ghost sm hs-x" data-act="closeHole" aria-label="Close">✕</button></div>' +
     '<div class="hm-wrap">' + holeSvg(hole) +
-    '<div class="yd"><div class="yd-h">FROM THE TEES</div>' + ty.map((t) => '<div class="yd-r"><i style="background:' + t.color + '"></i><span>' + esc(t.tee) + '</span><b>' + (t.yds == null ? '–' : t.yds) + '</b></div>').join('') + '</div></div>' +
+    '<div class="yd"><div class="yd-h">FROM THE TEES</div>' + ty.map((t) => '<div class="yd-r"><i style="background:' + t.color + '"></i><span>' + esc(t.tee) + '</span><b>' + (t.yds == null ? '–' : t.yds + 'y') + '</b></div>').join('') + '</div></div>' +
     '<div class="hs-foot">Tournament hole ' + esc(th) + ' · traced from the course map, not to scale</div></div></div>';
 }
 

@@ -102,3 +102,6 @@ table.rv td.sc{font-size:16px}
 .g9 input[type=number]{-moz-appearance:textfield;appearance:textfield}
 .g9 input::-webkit-inner-spin-button,.g9 input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
 .hcell .hn{min-width:18px;text-align:right}
+body{font-variant-numeric:lining-nums}
+.hnb{background:none;border:0;border-bottom:2px dotted var(--coral);padding:2px 4px;font:700 22px var(--serif);color:var(--ink);min-width:34px;min-height:34px}
+.holes td.mono{font:700 22px var(--sans)}
