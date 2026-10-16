@@ -18,7 +18,7 @@ export function newEvent() {
   const players = {};
   DEFAULT_PLAYERS.forEach((name, i) => { const id = 'u' + (i + 1); players[id] = { id, name, index: null, tieBreak: 0 }; });
   return {
-    name: 'The Crucible', year: new Date().getFullYear(), course: COURSE, format: FORMAT,
+    name: 'The Crucible', year: 2027, course: COURSE, format: FORMAT,
     players, stage: 'setup', matches: [], overrides: { finalWinner: {} }, pin: '1234', version: 2
   };
 }
