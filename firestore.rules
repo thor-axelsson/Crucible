@@ -1,0 +1,9 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Open for the event weekend. After the event, change "if true" to "if false".
+    match /events/{eventId}/{document=**} {
+      allow read, write: if true;
+    }
+  }
+}
