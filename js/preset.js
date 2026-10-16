@@ -10,9 +10,9 @@ export const COURSE = {
   // rating = 9-hole rating (half of the published 18-hole rating). yards = per hole, null if unknown.
   tees: {
     Gold:   { rating: 35.7, slope: 132, yards: [392, 340, 201, 584, 177, 338, 443, 310, 576] },
-    Green:  { rating: 34.2, slope: 127, yards: null },
-    White:  { rating: 32.8, slope: 118, yards: null },
-    Orange: { rating: 31.2, slope: 110, yards: null }
+    Green:  { rating: 34.2, slope: 127, yards: [366, 310, 171, 532, 141, 330, 404, 273, 528] },
+    White:  { rating: 32.8, slope: 118, yards: [331, 270, 163, 498, 141, 288, 376, 227, 440] },
+    Orange: { rating: 31.2, slope: 110, yards: [276, 242, 111, 436, 84, 243, 324, 205, 405] }
   }
 };
 
@@ -57,13 +57,7 @@ export const FORMAT = {
   }
 };
 
-export const DEMO_PLAYERS = [
-  { name: 'Thor', index: 4.2 },
-  { name: 'Nate', index: 7.8 },
-  { name: 'Phil', index: 10.5 },
-  { name: 'Zach', index: 12.1 },
-  { name: 'Jeff', index: 14.6 },
-  { name: 'Walt', index: 17.3 },
-  { name: 'Kurt', index: 20.4 },
-  { name: 'Arkasha', index: 24.0 }
-];
+// The same eight play every year. Handicap index stays empty until the admin sets it.
+export const DEFAULT_PLAYERS = ['Thor', 'Nate', 'Phil', 'Zach', 'Jeff', 'Walt', 'Kurt', 'Arkasha'];
+// Practice handicaps (admin 'Fill sample handicaps'), made up.
+export const DEMO_INDEXES = [4.2, 7.8, 10.5, 12.1, 14.6, 17.3, 20.4, 24.0];

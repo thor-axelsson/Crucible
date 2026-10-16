@@ -1,4 +1,4 @@
-import { COURSE, FORMAT, DEMO_PLAYERS } from './preset.js';
+import { COURSE, FORMAT, DEFAULT_PLAYERS, DEMO_INDEXES } from './preset.js';
 import { createDb, scoreKey } from './db.js';
 import * as E from './engine.js';
 import { EVENT_ID, FIREBASE } from '../config.js';
@@ -15,23 +15,27 @@ export function subscribe(f) { store.listeners.add(f); return () => store.listen
 function notify() { store._byContest = null; store.listeners.forEach((f) => f()); }
 
 export function newEvent() {
+  const players = {};
+  DEFAULT_PLAYERS.forEach((name, i) => { const id = 'u' + (i + 1); players[id] = { id, name, index: null, tieBreak: 0 }; });
   return {
     name: 'The Crucible', year: new Date().getFullYear(), course: COURSE, format: FORMAT,
-    players: {}, stage: 'setup', matches: [], overrides: { finalWinner: {} }, pin: '1234', version: 1
+    players, stage: 'setup', matches: [], overrides: { finalWinner: {} }, pin: '1234', version: 2
   };
 }
 
 export async function init() {
   store.db = await createDb(EVENT_ID, FIREBASE);
   store.me = lsGet('crucible:me');
-  store.db.onEvent((e) => { store.event = e; store.ready = true; notify(); });
+  let seeded = false;
+  store.db.onEvent((e, meta) => {
+    store.event = e; store.ready = true;
+    // first run: create the default event once the server confirms there is none
+    if (e === null && !seeded && !(meta && meta.fromCache)) { seeded = true; store.db.saveEvent(newEvent()); }
+    notify();
+  });
   store.db.onScores((s) => { store.scores = s || {}; notify(); });
   store.db.onStatus((s) => { store.status = s; notify(); });
   store.db.start();
-  // Firestore can take a moment to answer; in local mode the first emit is immediate.
-  setTimeout(async () => {
-    if (store.event === null && store.db.mode === 'local') { await store.db.saveEvent(newEvent()); }
-  }, 0);
 }
 
 export function setMe(id) { store.me = id; lsSet('crucible:me', id); notify(); }
@@ -82,14 +86,10 @@ export function standings() {
 }
 
 // ----- admin actions -----
-export function addPlayer(name, index) {
-  const id = 'u' + Math.random().toString(36).slice(2, 7);
-  return mutate((e) => { e.players[id] = { id, name: name.trim(), index: Number(index), tieBreak: 0 }; });
-}
-export const loadDemoPlayers = () => mutate((e) => {
-  e.players = {};
-  DEMO_PLAYERS.forEach((p, i) => { const id = 'u' + (i + 1); e.players[id] = { id, name: p.name, index: p.index, tieBreak: 0 }; });
+export const fillSampleHandicaps = () => mutate((e) => {
+  Object.keys(e.players).sort().forEach((id, i) => { e.players[id].index = DEMO_INDEXES[i]; });
 });
+export const handicapsReady = () => Object.values(store.event.players).every((p) => Number.isFinite(p.index));
 export function drawPool() {
   return mutate((e) => {
     const rank = E.rankPlayers(e.players);
@@ -98,15 +98,30 @@ export function drawPool() {
     e.stage = 'pool';
   });
 }
-export function startSemis() {
+export function finalizeGroup() {
   return mutate((e) => {
     const x = { course: e.course, format: e.format, players: e.players, overrides: e.overrides };
     const pool = e.matches.filter((m) => m.stage === 'pool');
     const st = E.poolStandings(x, pool, getScores);
     e.matches = pool.concat(E.generateSemis(st, e.format));
     e.stage = 'semis';
+    e.poolFinalizedAt = Date.now();
   });
 }
+export function reopenGroup() {
+  return mutate((e) => {
+    e.matches = e.matches.filter((m) => m.stage === 'pool');
+    e.stage = 'pool';
+    delete e.poolFinalizedAt;
+  });
+}
+export function forfeit(cid, pid, fromIdx) {
+  return mutate((e) => { const c = e.matches.find((m) => m.id === cid); c.wd = c.wd || {}; c.wd[pid] = fromIdx; });
+}
+export function unforfeit(cid, pid) {
+  return mutate((e) => { const c = e.matches.find((m) => m.id === cid); if (c.wd) delete c.wd[pid]; });
+}
+
 export function startFinals() {
   return mutate((e) => {
     const x = { course: e.course, format: e.format, players: e.players, overrides: e.overrides };

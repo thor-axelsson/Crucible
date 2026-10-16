@@ -6,7 +6,7 @@ export const scoreKey = (cid, hole) => cid + '~' + hole;
 
 function emitter() {
   const subs = new Set();
-  return { on(f) { subs.add(f); return () => subs.delete(f); }, emit(v) { subs.forEach((f) => f(v)); } };
+  return { on(f) { subs.add(f); return () => subs.delete(f); }, emit(v, m) { subs.forEach((f) => f(v, m)); } };
 }
 
 function createLocal(eventId) {
@@ -16,14 +16,14 @@ function createLocal(eventId) {
   const ev = emitter(), sc = emitter(), st = emitter();
   let event = load(kE, null), scores = load(kS, {});
   window.addEventListener('storage', (e) => {
-    if (e.key === kE) { event = load(kE, null); ev.emit(event); }
+    if (e.key === kE) { event = load(kE, null); ev.emit(event, { fromCache: false }); }
     if (e.key === kS) { scores = load(kS, {}); sc.emit(scores); }
   });
   return {
     mode: 'local',
-    start() { ev.emit(event); sc.emit(scores); st.emit({ state: 'local' }); },
+    start() { ev.emit(event, { fromCache: false }); sc.emit(scores); st.emit({ state: 'local' }); },
     onEvent: ev.on, onScores: sc.on, onStatus: st.on,
-    async saveEvent(e) { event = e; save(kE, e); ev.emit(e); },
+    async saveEvent(e) { event = e; save(kE, e); ev.emit(e, { fromCache: false }); },
     async setScore(key, val) { scores = { ...scores, [key]: val }; save(kS, scores); sc.emit(scores); },
     async clearScores() { scores = {}; save(kS, scores); sc.emit(scores); },
     async test() { return { ok: true, msg: 'Demo mode: data is stored on this phone only.' }; }
@@ -48,7 +48,7 @@ async function createFirestore(eventId, cfg) {
     start() {
       fsM.onSnapshot(evRef, { includeMetadataChanges: true }, (snap) => {
         err = null; cached = snap.metadata.fromCache && navigator.onLine === false ? true : snap.metadata.fromCache;
-        pending = snap.metadata.hasPendingWrites; ev.emit(snap.exists() ? snap.data() : null); push();
+        pending = snap.metadata.hasPendingWrites; ev.emit(snap.exists() ? snap.data() : null, { fromCache: snap.metadata.fromCache }); push();
       }, (e) => { err = e.message; push(); });
       fsM.onSnapshot(scCol, { includeMetadataChanges: true }, (snap) => {
         const out = {}; snap.forEach((d) => { out[d.id] = d.data(); });

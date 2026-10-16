@@ -25,10 +25,10 @@ Demo mode keeps data on that device only. Admin PIN starts as **1234**; change i
 
 ## First-time checklist
 1. Open the live link, Admin tab, PIN 1234, **Test connection** (should say Connected).
-2. Add the 8 players and handicap indexes. The Course data section holds Inness par, stroke index and tee ratings.
+2. The usual eight players are preloaded (rename anyone to swap them out). Enter each handicap index; the draw unlocks when all eight are set. Course data holds par, stroke index, tee ratings and yardages.
 3. **Make the pool draw**, then check **Edit pool teams** if you want different partners.
 4. Everyone opens the link, taps their name, and sees their match.
-5. After pool play: Admin > **Start semis**. After semis: **Start finals**. Ties go in Tiebreaks & playoffs.
+5. After pool play: Admin > **Review & finalize group stage** (compare to the paper cards, tap any hole to fix it, then Finalize). That starts the semis and moves everyone to their semifinal. In semis, players can be given No score on a hole or Forfeit (WD); Admin can Unforfeit. After semis: **Start finals**. Ties go in Tiebreaks & playoffs.
 
 ## Notes
 - Scores are last-write-wins: enter a hole again to fix it. Each entry stores who entered it and a timestamp (for the future highlight-reel idea).

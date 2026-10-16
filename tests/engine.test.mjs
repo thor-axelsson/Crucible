@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { COURSE, FORMAT, DEMO_PLAYERS } from '../js/preset.js';
+import { COURSE, FORMAT, DEFAULT_PLAYERS, DEMO_INDEXES } from '../js/preset.js';
 import * as E from '../js/engine.js';
 
 const players = {};
-DEMO_PLAYERS.forEach((p, i) => { const id = 'u' + (i + 1); players[id] = { id, name: p.name, index: p.index }; });
+DEFAULT_PLAYERS.forEach((n, i) => { const id = 'u' + (i + 1); players[id] = { id, name: n, index: DEMO_INDEXES[i] }; });
 const ctx = { course: COURSE, format: FORMAT, players, overrides: {} };
 const rank = E.rankPlayers(players);
 
@@ -107,4 +107,44 @@ test('semis: ranking and advancement', () => {
   assert.equal(ev.done, true);
   assert.equal(ev.order.length, 4);
   assert.deepEqual(ev.order.map((p) => p.goes), ['champ', 'champ', 'third', 'out']);
+});
+
+test('semis: no score counts zero points and still completes the hole', () => {
+  const st = E.poolStandings(ctx, E.generatePoolMatches(rank, FORMAT), () => ({}));
+  const semi = E.generateSemis(st, FORMAT)[0];
+  const sc = {};
+  for (let h = 1; h <= 9; h++) sc[h] = [4, 5, 6, 7];
+  sc[3] = [4, null, 6, 7];
+  const ev = E.evalSemis(semi, sc, ctx);
+  assert.equal(ev.done, true);
+  const p = ev.players[1];
+  assert.equal(p.noScores, 1);
+  assert.equal(ev.rows[2].pts[1], 0);
+});
+
+test('semis: withdrawn player is ranked last, never advances, later holes not required', () => {
+  const st = E.poolStandings(ctx, E.generatePoolMatches(rank, FORMAT), () => ({}));
+  const semi = { ...E.generateSemis(st, FORMAT)[0], wd: {} };
+  const best = semi.players[0];
+  semi.wd[best] = 4; // forfeits from the 5th hole on
+  const sc = {};
+  for (let h = 1; h <= 9; h++) sc[h] = [3, 5, 6, 7].map((v, j) => (j === 0 && h > 4 ? null : v));
+  // holes after the withdrawal only need the other three players
+  const ev = E.evalSemis(semi, sc, ctx);
+  assert.equal(ev.done, true);
+  const w = ev.players.find((p) => p.id === best);
+  assert.equal(w.wd, true);
+  assert.equal(ev.order[ev.order.length - 1].id, best);
+  assert.equal(w.goes, 'out');
+  assert.deepEqual(ev.order.slice(0, 3).map((p) => p.goes), ['champ', 'champ', 'third']);
+  // scores entered before withdrawal still count
+  assert.ok(w.total > 0);
+  // unforfeit: remove wd, later holes become incomplete? they were stored as no-score so still complete
+  delete semi.wd[best];
+  assert.equal(E.evalSemis(semi, sc, ctx).players.find((p) => p.id === best).wd, false);
+});
+
+test('poolProblems lists unfinished matches', () => {
+  const ms = E.generatePoolMatches(rank, FORMAT);
+  assert.equal(E.poolProblems(ms, ctx, () => ({})).length, 12);
 });

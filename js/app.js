@@ -1,10 +1,11 @@
 import { init, store, subscribe, ctx, getScores, scoreMeta, enterScore, mutate, players, contest, evalContest, standings,
-  addPlayer, loadDemoPlayers, drawPool, startSemis, startFinals, setStage, setMe } from './store.js';
+  fillSampleHandicaps, handicapsReady, drawPool, finalizeGroup, reopenGroup, startFinals, setStage, setMe, forfeit, unforfeit } from './store.js';
+import { holeSvg, teeYards } from './holes.js';
 import * as E from './engine.js';
 import { rulesSections } from './rules.js';
 import { EVENT_ID } from '../config.js';
 
-const ui = { tab: 'match', viewId: null, entry: null, adminOk: false, msg: '', pinErr: false, testMsg: null };
+const ui = { tab: 'match', viewId: null, entry: null, adminOk: false, msg: '', pinErr: false, testMsg: null, review: false, hole: null, confirm: null, lastStage: null };
 const $app = document.getElementById('app');
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmt = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
@@ -41,8 +42,10 @@ function strokeText(u, c, holeList) {
 function render() {
   const ae = document.activeElement;
   if (ae && /INPUT|SELECT/.test(ae.tagName) && ui.tab === 'admin' && !ui.entry) return;
-  if (!store.ready || !store.event) { $app.innerHTML = '<main><p class="muted">Loading…</p></main>'; return; }
+  if (!store.ready || !store.event) { $app.innerHTML = '<main><p class="muted">Loading… (the first load needs a connection)</p></main>'; return; }
   const ev = store.event;
+  // when the stage changes (finalize, semis, finals) everyone's screen goes back to their current match
+  if (ui.lastStage !== ev.stage) { if (ui.lastStage !== null) { ui.viewId = null; if (ui.tab !== 'admin') ui.tab = 'match'; } ui.lastStage = ev.stage; }
   const st = store.status.state;
   const stLabel = { local: 'Demo', live: 'Live', syncing: 'Saving…', connecting: 'Connecting…', offline: 'Offline · will sync', error: 'Sync error' }[st] || st;
   const me = store.me && ev.players[store.me];
@@ -60,7 +63,7 @@ function render() {
     (store.db.fallbackReason ? '<div class="banner">Could not reach Firebase, running in demo mode.</div>' : '') +
     '<main>' + body + '</main>' +
     '<nav class="tabs">' + tabs.map((t) => '<button data-act="tab" data-v="' + t[0] + '" class="' + (ui.tab === t[0] ? 'on' : '') + '">' + t[1] + '</button>').join('') + '</nav>' +
-    (ui.login ? loginSheet() : '') + (ui.entry ? entrySheet() : '');
+    (ui.login ? loginSheet() : '') + (ui.entry ? entrySheet() : '') + (ui.hole ? holeSheet() : '') + (ui.confirm ? confirmSheet() : '');
 }
 
 // ---------- login ----------
@@ -72,18 +75,40 @@ function loginSheet() {
 }
 
 // ---------- match view ----------
+function myContests() {
+  const ev = store.event;
+  if (!store.me) return [];
+  const mine = ev.matches.filter((m) => (m.t1 && (m.t1.includes(store.me) || m.t2.includes(store.me))) || (m.players && m.players.includes(store.me)));
+  const rank = { pool: 0, semis: 1, finals: 2 };
+  return mine.sort((a, b) => (rank[a.stage] - rank[b.stage]) || ((a.n || 0) - (b.n || 0)));
+}
+function navLabel(m, list) {
+  if (m.stage === 'pool') return 'Match ' + m.n + ' of ' + list.filter((x) => x.stage === 'pool').length;
+  if (m.stage === 'semis') return 'Semifinal';
+  return m.kind === 'champ' ? 'Championship' : '3rd place';
+}
 function viewMatch() {
   const ev = store.event;
   if (!ev.matches.length) {
-    return '<div class="card"><h2>Welcome</h2><p class="muted">' + (Object.keys(ev.players).length
+    return '<div class="card"><h2>Welcome</h2><p class="muted">' + (handicapsReady()
       ? 'The draw has not been made yet. The admin does that in the Admin tab.'
-      : 'Nothing is set up yet. Open the Admin tab (PIN 1234 until you change it) to add players and make the draw.') + '</p></div>';
+      : 'The draw is not ready yet. The admin sets handicaps and makes the draw in the Admin tab (PIN 1234 until changed).') + '</p></div>';
   }
-  const id = ui.viewId || myContestId();
+  const cur = myContestId();
+  const id = ui.viewId || cur;
   const c = id && contest(id);
   if (!c) return '<div class="card"><h2>Pick your name</h2><p class="muted">Tap the name button at the top to see your match, or browse every match in the All tab.</p><button class="btn" data-act="login">Pick my name</button></div>';
-  const mine = !ui.viewId;
-  return (ui.viewId ? '<button class="btn ghost sm" data-act="clearView">← Back to my match</button><div style="height:10px"></div>' : '') + contestCard(c, mine);
+  const list = myContests();
+  const idx = list.findIndex((m) => m.id === c.id);
+  let nav = '';
+  if (idx >= 0 && list.length > 1) {
+    nav = '<div class="mnav"><button class="btn ghost sm" data-act="navTo" data-id="' + (idx > 0 ? list[idx - 1].id : '') + '" ' + (idx > 0 ? '' : 'disabled') + ' aria-label="Previous match">‹</button>' +
+      '<div class="mnav-t"><b>' + esc(navLabel(c, list)) + '</b>' + (c.id === cur ? '<span class="pill now">current</span>' : '<button class="pill jump" data-act="clearView">go to current ▸</button>') + '</div>' +
+      '<button class="btn ghost sm" data-act="navTo" data-id="' + (idx < list.length - 1 ? list[idx + 1].id : '') + '" ' + (idx < list.length - 1 ? '' : 'disabled') + ' aria-label="Next match">›</button></div>';
+  } else if (ui.viewId && c.id !== cur) {
+    nav = '<button class="btn ghost sm" data-act="clearView">← ' + (store.me ? 'Back to my match' : 'Back') + '</button><div style="height:10px"></div>';
+  }
+  return nav + contestCard(c, !ui.viewId);
 }
 
 function contestCard(c, mine) {
@@ -112,7 +137,7 @@ function contestCard(c, mine) {
   e.rows.forEach((r) => {
     const res = r.state === 'played' ? (r.win === 0 ? '–' : (r.win === 1 ? '◀' : '▶')) : '';
     h += '<tr class="hole ' + (r.state === 'over' ? 'over' : '') + '" data-act="enter" data-cid="' + c.id + '" data-hole="' + r.hole + '">' +
-      '<td><span class="hn">' + r.th + '</span><div class="small muted mono">c' + r.hole + '</div></td><td>' + r.par + '</td><td>' + r.si + '</td>' +
+      '<td>' + holeCell(r) + '</td><td>' + r.par + '</td><td>' + r.si + '</td>' +
       e.units.map((u, j) => '<td class="sc">' + (r.scores ? r.scores[j] : '·') + (r.strokes[j] > 0 ? '<span class="dot">' + '•'.repeat(Math.min(r.strokes[j], 3)) + '</span>' : '') + '</td>').join('') +
       '<td class="mono">' + res + '</td></tr>';
   });
@@ -124,10 +149,15 @@ function contestCard(c, mine) {
   return h;
 }
 
+const MAP_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4 3 6.5v13L9 17l6 3 6-2.5v-13L15 7 9 4Z"/><path d="M9 4v13M15 7v13"/></svg>';
+function holeCell(r) {
+  return '<div class="hcell"><span class="hn">' + r.th + '</span><button class="mapbtn" data-act="holemap" data-hole="' + r.hole + '" data-th="' + r.th + '" aria-label="View hole ' + r.hole + ' map">' + MAP_ICON + '</button></div><div class="small muted mono">c' + r.hole + '</div>';
+}
+
 function semisBody(c, e) {
   let h = '<div class="card"><div class="eyebrow">Standings · modified stableford</div><table class="lb">';
   e.order.forEach((p) => {
-    h += '<tr><td class="rk">' + (p.tied && e.done ? 'T' : '') + p.pos + '</td><td><b>' + esc(p.name) + '</b><div class="small muted">allowance ' + p.allowance + (p.goes !== 'out' ? ' · ' + (p.goes === 'champ' ? 'to Championship' : 'to 3rd-place match') : '') + '</div></td><td class="pts">' + p.total + '</td></tr>';
+    h += '<tr><td class="rk">' + (p.tied && e.done ? 'T' : '') + p.pos + '</td><td><b>' + esc(p.name) + '</b>' + (p.wd ? ' <span class="wdtag">WD</span>' : '') + '<div class="small muted">allowance ' + p.allowance + (p.goes !== 'out' ? ' · ' + (p.goes === 'champ' ? 'to Championship' : 'to 3rd-place match') : '') + '</div></td><td class="pts">' + p.total + '</td></tr>';
   });
   h += '</table></div><div class="card"><div class="eyebrow">Strokes · ' + esc(store.event.format.semis.tee) + ' tees</div>';
   e.players.forEach((p) => {
@@ -135,8 +165,8 @@ function semisBody(c, e) {
   });
   h += '</div><div class="card"><table class="holes"><tr><th>Hole</th><th>Par</th><th>SI</th>' + e.players.map((p) => '<th>' + esc(p.name.slice(0, 6)) + '</th>').join('') + '</tr>';
   e.rows.forEach((r) => {
-    h += '<tr class="hole" data-act="enter" data-cid="' + c.id + '" data-hole="' + r.hole + '"><td><span class="hn">' + r.th + '</span><div class="small muted mono">c' + r.hole + '</div></td><td>' + r.par + '</td><td>' + r.si + '</td>' +
-      e.players.map((p, j) => '<td class="sc">' + (r.scores ? r.scores[j] : '·') + (r.strokes[j] > 0 ? '<span class="dot">' + '•'.repeat(Math.min(r.strokes[j], 3)) + '</span>' : '') + (r.pts ? '<div class="small muted">' + r.pts[j] + ' pt</div>' : '') + '</td>').join('') + '</tr>';
+    h += '<tr class="hole" data-act="enter" data-cid="' + c.id + '" data-hole="' + r.hole + '"><td>' + holeCell(r) + '</td><td>' + r.par + '</td><td>' + r.si + '</td>' +
+      e.players.map((p, j) => '<td class="sc">' + (r.gone && r.gone[j] ? '<span class="wdtag">WD</span>' : (r.scores ? (r.scores[j] == null ? '<span class="nstag">NS</span>' : r.scores[j]) : '·')) + (r.strokes[j] > 0 ? '<span class="dot">' + '•'.repeat(Math.min(r.strokes[j], 3)) + '</span>' : '') + (r.pts ? '<div class="small muted">' + r.pts[j] + ' pt</div>' : '') + '</td>').join('') + '</tr>';
   });
   return h + '</table><p class="small muted" style="margin:8px 0 0">Tap a hole to enter or fix scores. Points shown are net stableford.</p></div>';
 }
@@ -146,20 +176,55 @@ function entrySheet() {
   const { cid, hole, vals } = ui.entry;
   const c = contest(cid), e = evalContest(c);
   const row = e.rows.find((r) => r.hole === hole);
-  const labels = e.kind === 'semis' ? e.players.map((p) => p.name) : e.units.map((u) => u.label);
-  const par = row.par;
-  return '<div class="sheet" data-act="closeEntry"><div><div class="eyebrow">' + esc(contestTitle(c)) + '</div>' +
-    '<h2>Hole ' + row.th + ' <span class="muted small mono">course hole ' + hole + ' · par ' + par + ' · SI ' + row.si + '</span></h2>' +
-    labels.map((l, j) => '<div class="stepper"><div class="nm">' + esc(l) + (row.strokes[j] > 0 ? ' <span class="dot">' + '•'.repeat(Math.min(row.strokes[j], 3)) + '</span>' : '') + '</div>' +
-      '<button data-act="step" data-j="' + j + '" data-d="-1">−</button><div class="v">' + vals[j] + '</div><button data-act="step" data-j="' + j + '" data-d="1">+</button></div>').join('') +
-    '<div class="row" style="margin-top:12px"><button class="btn ghost sp" data-act="closeEntry">Cancel</button><button class="btn sp" data-act="saveEntry">Save</button></div></div></div>';
+  const semis = e.kind === 'semis';
+  const labels = semis ? e.players.map((p) => p.name) : e.units.map((u) => u.label);
+  let h = '<div class="sheet" data-act="closeEntry"><div><div class="eyebrow">' + esc(contestTitle(c)) + '</div>' +
+    '<h2>Hole ' + row.th + ' <span class="muted small mono">course hole ' + hole + ' · par ' + row.par + ' · SI ' + row.si + '</span></h2>';
+  labels.forEach((l, j) => {
+    const gone = semis && row.gone[j];
+    const dots = row.strokes[j] > 0 ? ' <span class="dot">' + '•'.repeat(Math.min(row.strokes[j], 3)) + '</span>' : '';
+    if (gone) {
+      h += '<div class="stepper"><div class="nm">' + esc(l) + ' <span class="wdtag">WD</span></div><div class="muted small">withdrawn</div></div>';
+      return;
+    }
+    const v = vals[j];
+    h += '<div class="stepper"><div class="nm">' + esc(l) + dots + '</div>' +
+      '<button data-act="step" data-j="' + j + '" data-d="-1">−</button><div class="v ' + (v == null ? 'ns' : '') + '">' + (v == null ? 'NS' : v) + '</div><button data-act="step" data-j="' + j + '" data-d="1">+</button></div>';
+    if (semis) {
+      h += '<div class="pacts"><button class="btn ghost sm" data-act="toggleNS" data-j="' + j + '">' + (v == null ? 'Enter a score' : 'No score') + '</button>' +
+        '<button class="btn ghost sm warn" data-act="askForfeit" data-j="' + j + '">Forfeit remaining holes</button></div>';
+    }
+  });
+  return h + '<div class="row" style="margin-top:14px"><button class="btn ghost sp" data-act="closeEntry">Cancel</button><button class="btn sp" data-act="saveEntry">Save</button></div></div></div>';
 }
 function openEntry(cid, hole) {
   const c = contest(cid), e = evalContest(c);
   const row = e.rows.find((r) => r.hole === hole);
   const n = e.kind === 'semis' ? e.players.length : e.units.length;
-  ui.entry = { cid, hole, vals: row.scores ? row.scores.slice() : Array(n).fill(row.par) };
+  const base = row.scores ? row.scores.slice() : Array(n).fill(row.par);
+  ui.entry = { cid, hole, vals: base.map((v, j) => (e.kind === 'semis' && row.gone[j] ? null : v)) };
   render();
+}
+
+// ---------- hole map ----------
+function holeSheet() {
+  const { hole, th } = ui.hole;
+  const course = store.event.course;
+  const ty = teeYards(course, hole);
+  return '<div class="sheet full"><div class="hs">' +
+    '<div class="hs-top"><div><div class="eyebrow" style="color:#F58A70">COURSE HOLE</div><div class="hs-n">' + hole + '</div></div>' +
+    '<div class="hs-stat"><span>PAR</span><b>' + course.par[hole - 1] + '</b></div><div class="hs-stat"><span>SI</span><b>' + course.si[hole - 1] + '</b></div>' +
+    '<button class="btn ghost sm hs-x" data-act="closeHole" aria-label="Close">✕</button></div>' +
+    '<div class="hm-wrap">' + holeSvg(hole) +
+    '<div class="yd"><div class="yd-h">FROM THE TEES</div>' + ty.map((t) => '<div class="yd-r"><i style="background:' + t.color + '"></i><span>' + esc(t.tee) + '</span><b>' + (t.yds == null ? '–' : t.yds) + '</b></div>').join('') + '</div></div>' +
+    '<div class="hs-foot">Tournament hole ' + esc(th) + ' · traced from the course map, not to scale</div></div></div>';
+}
+
+// ---------- confirm dialog ----------
+function confirmSheet() {
+  const c = ui.confirm;
+  return '<div class="sheet center" data-act="confirmNo"><div class="dlg"><h2>' + esc(c.title) + '</h2><p>' + c.body + '</p>' +
+    '<div class="row" style="margin-top:14px"><button class="btn ghost sp" data-act="confirmNo">Cancel</button><button class="btn ' + (c.danger ? 'coral' : '') + ' sp" data-act="confirmYes">' + esc(c.yes) + '</button></div></div></div>';
 }
 
 // ---------- leaderboard ----------
@@ -179,7 +244,7 @@ function viewBoard() {
     ev.matches.filter((m) => m.stage === 'semis').forEach((m) => {
       const e = evalContest(m);
       h += '<div class="card"><div class="eyebrow">' + esc(m.title) + ' · stableford · ' + (e.done ? 'final' : 'thru ' + e.thru + ' of ' + e.total) + '</div><table class="lb">' +
-        e.order.map((p) => '<tr data-act="view" data-id="' + m.id + '" class="' + (p.id === store.me ? 'me' : '') + '"><td class="rk">' + (p.tied && e.done ? 'T' : '') + p.pos + '</td><td><b>' + esc(p.name) + '</b><div class="small muted">' + (p.goes === 'champ' ? 'Championship' : p.goes === 'third' ? '3rd-place match' : 'Out') + (e.thru ? ' · thru hole ' + e.thru : '') + '</div></td><td class="pts">' + p.total + '</td></tr>').join('') + '</table></div>';
+        e.order.map((p) => '<tr data-act="view" data-id="' + m.id + '" class="' + (p.id === store.me ? 'me' : '') + '"><td class="rk">' + (p.tied && e.done ? 'T' : '') + p.pos + '</td><td><b>' + esc(p.name) + '</b>' + (p.wd ? ' <span class="wdtag">WD</span>' : '') + '<div class="small muted">' + (p.goes === 'champ' ? 'Championship' : p.goes === 'third' ? '3rd-place match' : 'Out') + (e.thru ? ' · thru hole ' + e.thru : '') + '</div></td><td class="pts">' + p.total + '</td></tr>').join('') + '</table></div>';
     });
   }
   const rows = standings();
@@ -222,48 +287,87 @@ function viewRules() {
 }
 
 // ---------- admin ----------
+function reviewMatch(m) {
+  const e = evalContest(m);
+  let h = '<div class="card"><div class="eyebrow">Match ' + m.n + ' · ' + GAME[m.game] + ' · Group ' + m.letter + ' · holes ' + m.tholes[0] + '–' + m.tholes[m.tholes.length - 1] + '</div>' +
+    '<div><b>' + esc(e.names[0]) + '</b> <span class="muted small">vs</span> <b>' + esc(e.names[1]) + '</b></div>' +
+    '<div class="status ' + (!e.done && e.played ? 'live' : '') + '">' + esc(e.status) + (e.done ? ' · ' + (e.lead === 0 ? '½–½' : (e.lead === 1 ? '1–0' : '0–1')) : '') + '</div>' +
+    '<table class="holes rv"><tr><th>Hole</th><th>' + (e.units.length > 2 ? 'Scores (team 1 | team 2)' : 'Scores (team 1 | team 2)') + '</th><th></th></tr>';
+  e.rows.forEach((r) => {
+    const sc = r.scores ? (e.units.length > 2 ? r.scores.slice(0, 2).join(' ') + ' | ' + r.scores.slice(2).join(' ') : r.scores.join(' | ')) : (r.state === 'over' ? 'not needed' : '–');
+    h += '<tr class="hole ' + (r.state === 'over' ? 'over' : '') + '" data-act="enter" data-cid="' + m.id + '" data-hole="' + r.hole + '"><td><span class="hn">' + r.th + '</span></td><td class="sc">' + esc(sc) + '</td><td><span class="pill">edit</span></td></tr>';
+  });
+  return h + '</table></div>';
+}
+function viewReview() {
+  const ev = store.event;
+  const probs = E.poolProblems(ev.matches, ctx(), getScores);
+  let h = '<button class="btn ghost sm" data-act="closeReview">← Admin</button><div style="height:10px"></div><div class="hero"><div class="eyebrow">Group stage</div><h2>Review &amp; finalize</h2>' +
+    '<p style="margin:6px 0 0">Compare each match with the paper scorecards. Tap any hole to fix a score.</p></div>';
+  h += probs.length
+    ? '<div class="card"><b class="err">' + probs.length + ' match' + (probs.length === 1 ? '' : 'es') + ' not finished</b><div class="small">' + probs.map((x) => 'Match ' + x.n + x.letter + (x.missing.length ? ' (missing hole' + (x.missing.length > 1 ? 's ' : ' ') + x.missing.join(', ') + ')' : '')).join(' · ') + '</div></div>'
+    : '<div class="card"><b class="ok">All 12 matches are complete.</b></div>';
+  const rows = standings();
+  h += '<div class="card"><div class="eyebrow">Standings if finalized now</div><table class="lb">' + rows.map((r) =>
+    '<tr style="cursor:default"><td class="rk">' + (r.tied ? 'T' : '') + r.rank + '</td><td><b>' + esc(r.name) + '</b><div class="small muted">' + (r.rank <= ev.format.semis.upperSize ? 'Upper semis' : 'Lower semis') + '</div></td><td class="pts">' + fmt(r.pts) + '<div class="small muted mono" style="font-weight:400">' + (r.margin >= 0 ? '+' : '') + fmt(r.margin) + '</div></td></tr>').join('') + '</table>';
+  const k = ev.format.semis.upperSize;
+  if (rows[k - 1] && rows[k] && rows[k - 1].pts === rows[k].pts && rows[k - 1].margin === rows[k].margin && rows[k - 1].tieBreak === rows[k].tieBreak) {
+    h += '<p class="err small">Tie at the cut line (' + esc(rows[k - 1].name) + ' and ' + esc(rows[k].name) + '). Settle it with a chip-off and enter the result under Tiebreaks before finalizing.</p>';
+  }
+  h += '</div>';
+  for (let n = 1; n <= 6; n++) h += ev.matches.filter((m) => m.stage === 'pool' && m.n === n).map(reviewMatch).join('');
+  h += '<button class="btn block" data-act="askFinalize">Finalize group stage &amp; start semis</button>';
+  return h;
+}
+
 function viewAdmin() {
   const ev = store.event;
   if (!ui.adminOk) {
     return '<div class="card"><h2>Admin</h2><label class="f"><span>PIN</span><input id="pin" inputmode="numeric" type="password" placeholder="PIN"></label>' +
       (ui.pinErr ? '<p class="err">Wrong PIN</p>' : '') + '<button class="btn" data-act="pin">Unlock</button><p class="small muted">This is a light lock to prevent accidents, not real security.</p></div>';
   }
-  const ps = players().sort((a, b) => a.index - b.index);
+  if (ui.review && ev.stage === 'pool') return viewReview();
+  const ps = players();
   const course = ev.course, tees = Object.keys(course.tees);
-  let h = '<div class="card"><h3>Players &amp; handicaps</h3><p class="small muted">Handicap index. Course handicaps are the 9-hole numbers per tee.</p>';
-  h += '<table class="lb"><tr class="small muted"><td></td><td></td>' + tees.map((t) => '<td class="mono small">' + esc(t.slice(0, 3)) + '</td>').join('') + '<td></td></tr>';
+  const ready = handicapsReady();
+  let h = '<div class="card"><h3>Players &amp; handicaps</h3><p class="small muted">The usual eight. Rename someone to swap them out. Enter each handicap index; the draw unlocks when all eight are set.</p><div class="plist">';
   ps.forEach((p) => {
-    h += '<tr style="cursor:default"><td><input data-path="players.' + p.id + '.name" value="' + esc(p.name) + '" style="width:84px"></td><td><input type="number" step="0.1" data-path="players.' + p.id + '.index" value="' + p.index + '" style="width:60px"></td>' +
-      tees.map((t) => '<td class="mono small">' + E.courseHcp9(p.index, t, course) + '</td>').join('') + '<td><button class="btn ghost sm" data-act="delPlayer" data-id="' + p.id + '">✕</button></td></tr>';
+    h += '<div class="pl2"><input class="nm" data-path="players.' + p.id + '.name" value="' + esc(p.name) + '" aria-label="Name"><input class="ix" type="number" step="0.1" inputmode="decimal" placeholder="Index" data-path="players.' + p.id + '.index" value="' + (p.index == null ? '' : p.index) + '" aria-label="Handicap index">' +
+      '<div class="hc small muted mono">' + (Number.isFinite(p.index) ? tees.map((t) => t + ' ' + E.courseHcp9(p.index, t, course)).join(' · ') : 'set handicap') + '</div></div>';
   });
-  h += '</table><div class="row" style="margin-top:10px"><input id="np-name" placeholder="Name" style="flex:1"><input id="np-idx" type="number" step="0.1" placeholder="Index"><button class="btn sm" data-act="addPlayer">Add</button></div>' +
-    '<p class="small muted">' + ps.length + ' players (the pool draw needs 8).</p>' +
-    (ps.length === 0 ? '<button class="btn ghost sm" data-act="demoPlayers">Load demo players</button>' : '') + '</div>';
+  h += '</div><p class="small muted" style="margin:8px 0 0">Course handicaps shown are 9-hole, per tee.</p>' +
+    '<button class="btn ghost sm" data-act="sample" style="margin-top:8px">Fill sample handicaps (practice)</button></div>';
 
   h += '<div class="card"><h3>Draw &amp; stages</h3><p class="small">Stage: <b>' + esc(ev.stage) + '</b></p>';
-  if (ev.stage === 'setup') h += '<button class="btn block" data-act="draw" ' + (ps.length === 8 ? '' : 'disabled') + '>Make the pool draw</button>';
+  if (ev.stage === 'setup') h += '<button class="btn block" data-act="draw" ' + (ready ? '' : 'disabled') + '>Make the pool draw</button>' + (ready ? '' : '<p class="small err">Set all eight handicaps first.</p>');
   else {
     h += '<div class="row" style="flex-wrap:wrap">';
-    if (ev.stage === 'pool') h += '<button class="btn sm" data-act="semis">Start semis from pool standings</button><button class="btn ghost sm" data-act="redraw">Redo draw</button>';
-    if (ev.stage === 'semis') h += '<button class="btn sm" data-act="finals">Start finals from semis</button><button class="btn ghost sm" data-act="toStage" data-v="pool">Back to pool view</button>';
+    if (ev.stage === 'pool') h += '<button class="btn" data-act="review">Review &amp; finalize group stage</button><button class="btn ghost sm" data-act="redraw">Redo draw</button>';
+    if (ev.stage === 'semis') h += '<button class="btn sm" data-act="finals">Start finals from semis</button><button class="btn ghost sm" data-act="askReopen">Reopen group stage</button><button class="btn ghost sm" data-act="review2">Review group scores</button>';
     if (ev.stage === 'finals') h += '<button class="btn ghost sm" data-act="toStage" data-v="semis">Back to semis view</button>';
     h += '</div>';
     h += E.validatePool(ev.matches).map((x) => '<p class="err small">' + esc(x) + '</p>').join('');
   }
   h += '</div>';
 
+  const wds = [];
+  ev.matches.filter((m) => m.stage === 'semis' && m.wd).forEach((m) => Object.keys(m.wd).forEach((pid) => wds.push({ m, pid, from: m.wd[pid] })));
+  if (wds.length) {
+    h += '<div class="card"><h3>Withdrawn players</h3><p class="small muted">Unforfeit puts the player back in. Holes entered while withdrawn show as No score and can be edited.</p>' +
+      wds.map((w) => '<div class="row" style="margin:6px 0"><span class="sp"><b>' + esc(pname(w.pid)) + '</b> <span class="wdtag">WD</span> <span class="small muted">from hole ' + (w.m.tholes ? w.m.tholes[w.from] : w.from + 1) + ' · ' + esc(w.m.title) + '</span></span><button class="btn ghost sm" data-act="unforfeit" data-cid="' + w.m.id + '" data-id="' + w.pid + '">Unforfeit</button></div>').join('') + '</div>';
+  }
+
   const pool = ev.matches.filter((m) => m.stage === 'pool');
   if (pool.length) {
     h += '<details class="card"><summary>Edit pool teams</summary><p class="small muted">Change who plays with whom. Applies to that match only; scores already entered stay.</p>';
     const opt = (sel) => ps.map((p) => '<option value="' + p.id + '" ' + (p.id === sel ? 'selected' : '') + '>' + esc(p.name) + '</option>').join('');
     pool.forEach((m) => {
-      h += '<div style="margin:10px 0"><b class="small">Match ' + m.n + m.letter + ' · ' + GAME[m.game] + '</b><div class="row" style="flex-wrap:wrap">' +
-        ['t1.0', 't1.1', 't2.0', 't2.1'].map((s, k) => '<select data-team="' + m.id + '.' + s + '">' + opt(m[s.slice(0, 2)][+s[3]]) + '</select>' + (k === 1 ? '<span class="muted">vs</span>' : '')).join('') + '</div></div>';
+      h += '<div style="margin:10px 0"><b class="small">Match ' + m.n + m.letter + ' · ' + GAME[m.game] + '</b><div class="row tsel">' +
+        ['t1.0', 't1.1', 't2.0', 't2.1'].map((s2, k) => '<select data-team="' + m.id + '.' + s2 + '">' + opt(m[s2.slice(0, 2)][+s2[3]]) + '</select>' + (k === 1 ? '<span class="muted">vs</span>' : '')).join('') + '</div></div>';
     });
     h += '</details>';
   }
 
-  // tie-breaks & finals override
   h += '<details class="card"><summary>Tiebreaks &amp; playoffs</summary><p class="small muted">Chip-off or manual tiebreak: a higher number ranks higher among players who are otherwise tied.</p>' +
     ps.map((p) => '<div class="row" style="margin:5px 0"><span class="sp">' + esc(p.name) + '</span><input type="number" step="1" data-path="players.' + p.id + '.tieBreak" value="' + (p.tieBreak || 0) + '"></div>').join('');
   ev.matches.filter((m) => m.stage === 'finals').forEach((m) => {
@@ -272,7 +376,6 @@ function viewAdmin() {
   });
   h += '</details>';
 
-  // format and course
   const F = ev.format;
   const num = (path, label, step) => '<label class="f"><span>' + label + '</span><input type="number" step="' + (step || 0.01) + '" data-path="' + path + '" value="' + path.split('.').reduce((o, k) => o[k], ev) + '"></label>';
   h += '<details class="card"><summary>Format settings</summary>' +
@@ -283,13 +386,14 @@ function viewAdmin() {
     num('format.games.altshot.pct', 'Alt-shot: % of combined') + num('format.games.bestball.pct', 'Best ball: % of each') +
     num('format.semis.pct', 'Semis: % allowance') + num('format.finals.pct', 'Finals: % allowance') +
     '<p class="small muted">Changing these re-computes every match immediately. Do it before play starts.</p></details>';
-  h += '<details class="card"><summary>Course data</summary><p class="small muted">Par and stroke index for the nine holes, and tee ratings (9-hole rating / slope).</p>' +
-    '<table class="holes"><tr><th>Hole</th>' + course.par.map((_, i) => '<th>' + (i + 1) + '</th>').join('') + '</tr><tr><td class="small">Par</td>' +
-    course.par.map((v, i) => '<td><input type="number" data-path="course.par.' + i + '" value="' + v + '" style="width:34px;padding:5px"></td>').join('') + '</tr><tr><td class="small">SI</td>' +
-    course.si.map((v, i) => '<td><input type="number" data-path="course.si.' + i + '" value="' + v + '" style="width:34px;padding:5px"></td>').join('') + '</tr></table>' +
+  h += '<details class="card"><summary>Course data</summary><p class="small muted">Par and stroke index for the nine holes, tee ratings (9-hole rating / slope) and yardages.</p>' +
+    '<div class="g9"><span></span>' + course.par.map((_, i) => '<b class="gh">' + (i + 1) + '</b>').join('') +
+    '<span class="small">Par</span>' + course.par.map((v, i) => '<input type="number" inputmode="numeric" data-path="course.par.' + i + '" value="' + v + '">').join('') +
+    '<span class="small">SI</span>' + course.si.map((v, i) => '<input type="number" inputmode="numeric" data-path="course.si.' + i + '" value="' + v + '">').join('') +
+    tees.map((t) => '<span class="small">' + esc(t.slice(0, 3)) + '</span>' + (course.tees[t].yards || Array(9).fill(0)).map((v, i) => '<input type="number" inputmode="numeric" data-path="course.tees.' + t + '.yards.' + i + '" value="' + v + '">').join('')).join('') + '</div>' +
+    '<p class="small muted" style="margin:6px 0">Rows under SI are yardages per tee.</p>' +
     tees.map((t) => '<div class="row" style="margin:6px 0"><b class="sp">' + esc(t) + '</b><input type="number" step="0.1" data-path="course.tees.' + t + '.rating" value="' + course.tees[t].rating + '"><input type="number" step="1" data-path="course.tees.' + t + '.slope" value="' + course.tees[t].slope + '"></div>').join('') + '</details>';
 
-  // data tools
   h += '<details class="card"><summary>Data &amp; connection</summary>' +
     '<p class="small">Mode: <b>' + (store.db.mode === 'firestore' ? 'Shared (Firebase)' : 'Demo (this phone only)') + '</b> · event id ' + esc(EVENT_ID) + '</p>' +
     '<div class="row" style="flex-wrap:wrap"><button class="btn sm" data-act="test">Test connection</button><button class="btn ghost sm" data-act="export">Export backup</button><button class="btn ghost sm" data-act="import">Import backup</button></div>' +
@@ -322,6 +426,9 @@ $app.addEventListener('click', async (ev0) => {
     case 'closeLogin': ui.login = false; break;
     case 'setMe': ui.login = false; ui.viewId = null; setMe(d.id || null); ui.tab = 'match'; return;
     case 'clearView': ui.viewId = null; break;
+    case 'navTo': if (d.id) ui.viewId = d.id; window.scrollTo(0, 0); break;
+    case 'holemap': ui.hole = { hole: +d.hole, th: d.th }; break;
+    case 'closeHole': ui.hole = null; break;
     case 'view': ui.viewId = d.id; ui.tab = 'match'; window.scrollTo(0, 0); break;
     case 'viewPlayer': {
       const id = E.currentContestFor(d.id, store.event.matches, store.event.stage, ctx(), getScores);
@@ -329,7 +436,47 @@ $app.addEventListener('click', async (ev0) => {
     }
     case 'enter': openEntry(d.cid, +d.hole); return;
     case 'closeEntry': ui.entry = null; break;
-    case 'step': { const v = ui.entry.vals; v[+d.j] = Math.max(1, Math.min(15, v[+d.j] + +d.d)); break; }
+    case 'step': {
+      const v = ui.entry.vals, j = +d.j;
+      if (v[j] == null) { const e0 = evalContest(contest(ui.entry.cid)); v[j] = e0.rows.find((r) => r.hole === ui.entry.hole).par; }
+      else v[j] = Math.max(1, Math.min(15, v[j] + +d.d));
+      break;
+    }
+    case 'toggleNS': {
+      const v = ui.entry.vals, j = +d.j;
+      const e0 = evalContest(contest(ui.entry.cid));
+      v[j] = v[j] == null ? e0.rows.find((r) => r.hole === ui.entry.hole).par : null;
+      break;
+    }
+    case 'askForfeit': {
+      const c0 = contest(ui.entry.cid), e0 = evalContest(c0), j = +d.j;
+      const row = e0.rows.find((r) => r.hole === ui.entry.hole);
+      ui.confirm = { kind: 'forfeit', cid: c0.id, pid: c0.players[j], idx: row.idx, j, danger: true, yes: 'Yes, forfeit', title: 'Forfeit ' + pname(c0.players[j]) + '?',
+        body: esc(pname(c0.players[j])) + ' will be marked <b>WD</b> (withdrawn) and get no score on hole ' + row.th + ' and every hole after it. Points already earned stay. An admin can undo this.' };
+      break;
+    }
+    case 'confirmNo': ui.confirm = null; break;
+    case 'confirmYes': {
+      const c1 = ui.confirm; ui.confirm = null;
+      if (c1.kind === 'forfeit') { if (ui.entry) ui.entry.vals[c1.j] = null; render(); await forfeit(c1.cid, c1.pid, c1.idx); return; }
+      if (c1.kind === 'finalize') { try { await finalizeGroup(); ui.review = false; ui.viewId = null; ui.tab = 'board'; } catch (err) { alert(err.message); } break; }
+      if (c1.kind === 'reopen') { await reopenGroup(); ui.review = false; return; }
+      break;
+    }
+    case 'unforfeit': await unforfeit(d.cid, d.id); return;
+    case 'review': case 'review2': if (store.event.stage === 'pool') { ui.review = true; window.scrollTo(0, 0); } else { alert('The group stage is finalized. Reopen it first to review and edit.'); } break;
+    case 'closeReview': ui.review = false; break;
+    case 'askFinalize': {
+      const probs = E.poolProblems(store.event.matches, ctx(), getScores);
+      ui.confirm = { kind: 'finalize', danger: false, yes: 'Finalize', title: 'Finalize group stage?',
+        body: (probs.length ? '<b class="err">' + probs.length + ' match' + (probs.length === 1 ? ' is' : 'es are') + ' not finished.</b> ' : '') +
+          'This locks in the pool standings, seeds the upper and lower semis, and moves everyone\'s match screen to their semifinal.' };
+      break;
+    }
+    case 'askReopen':
+      ui.confirm = { kind: 'reopen', danger: true, yes: 'Reopen', title: 'Reopen group stage?', body: 'This removes the semifinal groups. Semi scores already entered are kept but will not show until you finalize again.' };
+      break;
+    case 'sample': await fillSampleHandicaps(); return;
     case 'saveEntry': { const { cid, hole, vals } = ui.entry; ui.entry = null; render(); await enterScore(cid, hole, vals); return; }
     case 'pin': {
       const v = document.getElementById('pin').value;
@@ -337,23 +484,8 @@ $app.addEventListener('click', async (ev0) => {
       break;
     }
     case 'lock': ui.adminOk = false; break;
-    case 'addPlayer': {
-      const n = document.getElementById('np-name').value, i = document.getElementById('np-idx').value;
-      if (!n.trim() || i === '' || isNaN(+i)) { alert('Enter a name and a handicap index.'); return; }
-      await addPlayer(n, i); return;
-    }
-    case 'delPlayer': {
-      if (store.event.matches.length && !confirm('Removing a player after the draw will break their matches. Continue?')) return;
-      await mutate((e) => { delete e.players[d.id]; }); return;
-    }
-    case 'demoPlayers': await loadDemoPlayers(); return;
     case 'draw': try { await drawPool(); } catch (e) { alert(e.message); } return;
     case 'redraw': if (confirm('Redo the draw from current handicaps? Existing match teams are replaced; entered scores stay in the database but may not match.')) { try { await drawPool(); } catch (e) { alert(e.message); } } return;
-    case 'semis': {
-      const x = ctx();
-      if (!E.poolComplete(store.event.matches, x, getScores) && !confirm('Not every pool match is finished. Seed the semis anyway?')) return;
-      await startSemis(); ui.tab = 'board'; break;
-    }
     case 'finals': {
       const evs = store.event.matches.filter((m) => m.stage === 'semis').map((m) => evalContest(m));
       if (!evs.every((x) => x.done) && !confirm('Semis are not finished. Make the finals anyway?')) return;
@@ -391,7 +523,7 @@ $app.addEventListener('change', async (e) => {
   }
   if (t.dataset.path) {
     const raw = t.value;
-    const val = t.type === 'number' ? (raw === '' ? 0 : Number(raw)) : raw;
+    const val = t.type === 'number' ? (raw === '' ? (/\.index$/.test(t.dataset.path) ? null : 0) : Number(raw)) : raw;
     t.blur();
     await mutate((ev) => setPath(ev, t.dataset.path, val));
     render();

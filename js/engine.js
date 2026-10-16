@@ -162,7 +162,7 @@ export function poolStandings(ctx, matches, getScores) {
   });
   rows.sort((a, b) =>
     (b.pts - a.pts) || (b.margin - a.margin) || (b.tieBreak - a.tieBreak) ||
-    (a.index - b.index) || a.name.localeCompare(b.name));
+    ((a.index == null ? 99 : a.index) - (b.index == null ? 99 : b.index)) || a.name.localeCompare(b.name));
   const same = (a, b) => a.pts === b.pts && a.margin === b.margin && a.tieBreak === b.tieBreak;
   rows.forEach((r, i) => {
     let k = i;
@@ -190,16 +190,26 @@ export function evalSemis(contest, scores, ctx) {
   scores = scores || {};
   const f = format.semis;
   const ids = contest.players;
+  const wd = contest.wd || {};
+  const wdFrom = ids.map((id) => (wd[id] == null ? Infinity : wd[id]));
   const allow = ids.map((id) => roundHalfUp(f.pct * courseHcp9(ctx.players[id].index, f.tee, course)));
   const holes = contest.holes;
   const rows = holes.map((h, k) => {
-    const s = scores[h], ok = complete(s, ids.length);
+    const raw = scores[h];
+    const gone = wdFrom.map((w) => k >= w);            // withdrawn from this hole on
+    const s = Array.isArray(raw) && raw.length === ids.length
+      ? raw.map((v, j) => (gone[j] ? null : (Number.isFinite(v) ? v : null))) : null;
+    // entered = every active player has a number or an explicit no-score
+    const ok = Array.isArray(raw) && raw.length === ids.length
+      ? ids.every((_, j) => gone[j] || raw[j] === null || Number.isFinite(raw[j]))
+      : gone.every(Boolean) && ids.length > 0;
+    const sc = s || ids.map(() => null);
     const st = allow.map((a) => strokesOnHole(a, course.si[h - 1]));
-    const net = ok ? s.map((v, j) => v - st[j]) : null;
-    const pts = ok ? net.map((v) => stablefordPoints(v, course.par[h - 1], f.table)) : null;
+    const net = ok ? sc.map((v, j) => (v == null ? null : v - st[j])) : null;
+    const pts = ok ? net.map((v) => (v == null ? 0 : stablefordPoints(v, course.par[h - 1], f.table))) : null;
     return {
       idx: k, hole: h, th: contest.tholes ? contest.tholes[k] : h, par: course.par[h - 1], si: course.si[h - 1],
-      scores: s || null, strokes: st, net, pts, entered: ok
+      scores: ok ? sc : null, gone, strokes: st, net, pts, entered: ok
     };
   });
   // a hole only counts once every earlier hole is complete
@@ -212,20 +222,26 @@ export function evalSemis(contest, scores, ctx) {
     total: sum(counted, j),
     back3: sum(counted.slice(-3), j),
     back6: sum(counted.slice(-6), j),
-    birdies: counted.filter((r) => r.net[j] - r.par <= -1).length,
+    birdies: counted.filter((r) => r.net[j] != null && r.net[j] - r.par <= -1).length,
+    noScores: counted.filter((r) => r.scores[j] == null && !r.gone[j]).length,
+    wd: wd[id] != null, wdFrom: wd[id] == null ? null : wd[id],
     tieBreak: ctx.players[id].tieBreak || 0, col: j
   }));
   const order = players.slice().sort((a, b) =>
+    ((a.wd ? 1 : 0) - (b.wd ? 1 : 0)) ||
     (b.total - a.total) || (b.back3 - a.back3) || (b.back6 - a.back6) ||
     (b.birdies - a.birdies) || (b.tieBreak - a.tieBreak) || (a.col - b.col));
-  const same = (a, b) => a.total === b.total && a.back3 === b.back3 && a.back6 === b.back6 &&
+  const same = (a, b) => a.wd === b.wd && a.total === b.total && a.back3 === b.back3 && a.back6 === b.back6 &&
     a.birdies === b.birdies && a.tieBreak === b.tieBreak;
   const adv = f.advance[contest.letter] || [];
+  let slot = 0;
   order.forEach((p, i) => {
     p.pos = i + 1;
-    p.tied = (i > 0 && same(order[i - 1], p)) || (i < order.length - 1 && same(order[i + 1], p));
-    p.goes = adv[i] || 'out';
+    p.tied = !p.wd && ((i > 0 && same(order[i - 1], p)) || (i < order.length - 1 && same(order[i + 1], p)));
+    // a withdrawn player never advances; their slot goes to the next active player
+    p.goes = p.wd ? 'out' : (adv[slot++] || 'out');
   });
+  // done = every hole is in, or only withdrawn players are left to play
   const done = thru === rows.length;
   return { kind: 'semis', id: contest.id, rows, players, order, thru, done, total: rows.length };
 }
@@ -277,7 +293,7 @@ export function evalFinal(contest, scores, ctx) {
 // Player ids ordered by handicap (lowest first); ties broken by name.
 export function rankPlayers(players) {
   return Object.values(players)
-    .sort((x, y) => (x.index - y.index) || x.name.localeCompare(y.name))
+    .sort((x, y) => ((x.index == null ? 99 : x.index) - (y.index == null ? 99 : y.index)) || x.name.localeCompare(y.name))
     .map((p) => p.id);
 }
 
@@ -350,6 +366,18 @@ export function validatePool(matches) {
     });
   });
   return problems;
+}
+
+// Holes still missing in each pool match, for the review screen.
+export function poolProblems(matches, ctx, getScores) {
+  const out = [];
+  matches.filter((m) => m.stage === 'pool').forEach((m) => {
+    const e = evalPoolMatch(m, getScores(m.id), ctx);
+    // a match decided early (2&1) legitimately has an unplayed last hole
+    const missing = e.rows.filter((r) => r.state === 'open').map((r) => r.th);
+    if (!e.done) out.push({ id: m.id, n: m.n, letter: m.letter, missing });
+  });
+  return out;
 }
 
 // ---------- Where should a player land? ----------
